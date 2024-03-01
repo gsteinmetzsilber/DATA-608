@@ -112,7 +112,7 @@ ggplot(data, aes(x = law_strength, y = y_pos, fill = RATE)) +
   ) +
   # Arrow
   geom_segment(aes(x = 1, y = -5, xend = 5, yend = -5), 
-               arrow = arrow(type = "closed", ends = "both", length = unit(0.15, "inches")), size = 0.4) +
+               arrow = arrow(type = "closed", ends = "both", length = unit(0.15, "inches")), linewidth = 0.4) +
   #Labels: "Most Lax" and "Strictest"
   annotate("text", x = 0.7, y = -5, label = "Most Lax", size = 2.7) + # .3 off the arrow for both labels
   annotate("text", x = 5.3, y = -5, label = "Strictest", size = 2.7) +
