@@ -1,0 +1,133 @@
+---
+title: "Story 3 - Gun Violence"
+author: "Gavriel Steinmetz-Silber"
+date: "2024-02-29"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+First, I'll get the data with the firearm mortality rates: 
+
+```{r}
+library(tidyverse)
+gun_deaths = read_csv("https://raw.githubusercontent.com/gsteinmetzsilber/DATA-608/main/Story%203/CDC%20Firearm%20Mortality%20Rates.csv")
+```
+A little tidying:
+
+```{r}
+gun_deaths = gun_deaths %>% 
+  filter(YEAR == 2021) %>% 
+  select("YEAR", "STATE", "RATE", "DEATHS")
+```
+
+Now, let's use the Giffords Law Center scorecard (https://giffords.org/lawcenter/resources/scorecard2021/) to evaluate the strength of gun laws. I actually prefer the state abbreviations rather than the state names, because it will make the join easier. I have the html content of the table in my GitHub. 
+
+```{r}
+library(rvest)
+
+giffords = read_html("https://raw.githubusercontent.com/gsteinmetzsilber/DATA-608/main/Story%203/Giffords_2021_Scores.html")
+states = giffords %>%
+  html_nodes(".state-name a") %>%
+  html_attr("data-state")
+
+grades = giffords %>% 
+  html_nodes(".grade span") %>% 
+  html_text()
+
+graded_laws = data.frame(STATE = states, Grade = grades)
+
+# Moving away from A to F since that reflects judgement and I want to be more objective 
+graded_laws = graded_laws %>% 
+    mutate(law_strength = case_when(
+    str_starts(Grade, "A") ~ 5,
+    str_starts(Grade, "B") ~ 4,
+    str_starts(Grade, "C") ~ 3,
+    str_starts(Grade, "D") ~ 2,
+    str_starts(Grade, "F") ~ 1,
+    TRUE ~ NA_integer_  
+  ))
+
+print(graded_laws)
+```
+
+Now I'll join on the state abbreviations: 
+
+```{r}
+data = merge(gun_deaths, graded_laws, by = "STATE", all = TRUE) %>%
+  select("STATE", "RATE", "law_strength")
+
+head(data)
+```
+
+I want the tiles in each category to collectively be one height...otherwise it gets quite challenging to grasp differences between the categories. That means a tile in a category should be 50/[number of tiles in a category] units tall. I can then create a column called y_pos which is the cumulative sum within each category (minus half the height) and y_pos will be used to plot the center of each tile. 
+
+```{r}
+data = data %>%
+  group_by(law_strength) %>%
+  arrange(RATE) %>% #so that there's a gradient within each category for clarity
+  mutate(
+    Height = 50 / n(),  
+    y_pos = cumsum(Height) - (Height / 2)  # I have to subtract height / 2 so that we ehave the center.
+  ) %>%
+  ungroup()
+```
+
+
+And now I visualize. I use viridis for a more accessible color palette. Also, I'll use shadowtext so that the state abbreviations are more visible on the lighter backgrounds:
+
+```{r}
+library(ggplot2)
+library(viridis)
+library(shadowtext)
+
+ggplot(data, aes(x = law_strength, y = y_pos, fill = RATE)) +
+  geom_tile(aes(height = Height), color = "white") + 
+  geom_shadowtext(aes(label = STATE), 
+                  color = "white",  
+                  bg.color = "#bbbbbb",  #border
+                  size = 2.35, 
+                  vjust = 0.3,
+                  bg.r = 0.15) + # border radius
+
+  scale_fill_viridis(name = "Mortality Rate \n(per 100,000 people)", direction = -1, option = "F") +
+  labs(
+    title = "Firearm Mortality Rate by Law Strength",
+    subtitle = "States with the most lax gun laws have higher firearm mortality rates"
+  ) +
+  theme_minimal() + #get rid of grey box
+  #getting rid of more ink
+  theme(
+    axis.text.x = element_blank(),
+    axis.ticks.x = element_blank(),
+    axis.text.y = element_blank(),
+    axis.ticks.y = element_blank(),
+    panel.grid.major = element_blank(),
+    panel.grid.minor = element_blank(),
+    axis.title.x = element_blank(),
+    axis.title.y = element_blank(),
+    legend.position = "right"
+  ) +
+  # Arrow
+  geom_segment(aes(x = 1, y = -5, xend = 5, yend = -5), 
+               arrow = arrow(type = "closed", ends = "both", length = unit(0.15, "inches")), size = 0.4) +
+  #Labels: "Most Lax" and "Strictest"
+  annotate("text", x = 0.7, y = -5, label = "Most Lax", size = 2.7) + # .3 off the arrow for both labels
+  annotate("text", x = 5.3, y = -5, label = "Strictest", size = 2.7) +
+  # Label: "Gun Law Strength"
+  annotate("text", x = 3, y = -7, label = "Gun Law Strength", size = 3.6)
+
+```
+
+
+
+
+
+
+
+
+
+
+
