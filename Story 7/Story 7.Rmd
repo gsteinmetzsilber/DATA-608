@@ -1,0 +1,332 @@
+---
+title: "608 Story 7"
+author: "Gavriel Steinmetz-Silber"
+date: "2024-05-09"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+We need a few pieces of data:
+1. 50 critical minerals
+2. Top importers for minerals 
+3. Countries and their relationship to the US (ally vs. adversary vs. neutral)
+
+
+1. Critical minerals 
+
+The 2023 critical minerals can be found in the end use file (source: https://www.sciencebase.gov/catalog/item/63d31d62d34e06fef1501263):
+
+```{r}
+library(tidyverse)
+minerals = read_csv("https://raw.githubusercontent.com/gsteinmetzsilber/DATA-608/main/Story%207/Data/MCS2023_T4_Critical_Minerals_End_Use.csv") 
+```
+
+```{r}
+minerals = minerals %>% 
+  select(`Critical Mineral`)
+
+head(minerals)
+```
+
+Now, this is the complete list of minerals. We also have a csv file with the main importers of minerals to the US. We will join the two, ensuring that only critical minerals make it on to the merged dataframe. 
+
+
+```{r}
+net_imports = read_csv("https://raw.githubusercontent.com/gsteinmetzsilber/DATA-608/main/Story%207/Data/MCS2023_Fig2_Net_Import_Reliance.csv")
+```
+
+The naming has to be consistent for merging: 
+
+```{r}
+net_imports = net_imports %>%
+  mutate(commodity_clean = str_extract(Commodity, "^[^\\s,]+"))
+```
+
+Let's check if any commodity shows up more than once:
+
+
+```{r}
+net_imports %>%
+  group_by(commodity_clean) %>%
+  summarize(count = n()) %>%
+  filter(count > 1)
+```
+For example titanium has: Japan, Kazakhstan, Ukraine in one row; South Africa, Australia, Madagascar, Canada in another.
+
+So let's just combine countries for those commodities: 
+
+```{r}
+net_imports_combined = net_imports %>%
+  group_by(commodity_clean) %>%
+  summarize(Combined_Import_Sources = str_c(unique(Major_Import_Sources_2018_2021), collapse = ", "),
+            .groups = 'drop') 
+
+```
+
+Now let's join the two dataframes:
+
+```{r}
+net_imports_combined = net_imports_combined %>%
+  mutate(commodity_clean = str_to_title(commodity_clean))
+```
+
+
+```{r}
+joined_data = inner_join(minerals, net_imports_combined, 
+                         by = c("Critical Mineral" = "commodity_clean"))
+```
+
+Now, let's get a dataframe with country names:
+
+
+```{r}
+library(countrycode)
+
+countries_df = data.frame(country_code = countrycode::codelist$iso2c)
+countries_df$country_name = countrycode(countries_df$country_code, "iso2c", "country.name")
+
+```
+
+Now I check naming consistency; we may have to rename some countries in the dataframe.
+```{r}
+country_list = joined_data %>%
+  mutate(Countries = str_split(Combined_Import_Sources, ",\\s*")) %>%
+  unnest(Countries) %>%
+  distinct(Countries) %>%
+  pull(Countries)
+
+print(setdiff(country_list, countries_df$country_name))
+```
+
+Actually not bad! We can just remove Europe and change "Republic of Korea" to "South Korea."
+
+```{r}
+joined_data = joined_data %>%
+  mutate(Combined_Import_Sources = str_replace_all(Combined_Import_Sources, "Republic of Korea", "South Korea")) %>%
+  mutate(Combined_Import_Sources = str_replace_all(Combined_Import_Sources, "Europe ", ""))
+```
+
+Now, let's add information about the relationship the US has with different countries. Largely, US allies include NATO allies and Major non-NATO allies (MNNA).
+
+```{r}
+nato = c("Albania", "Belgium", "Bulgaria", "Canada", "Croatia", "Czechia",
+          "Denmark", "Estonia", "Finland", "France", "Germany", "Greece",
+          "Hungary", "Iceland", "Italy", "Latvia", "Lithuania", "Luxembourg",
+          "Montenegro", "Netherlands", "North Macedonia", "Norway", "Poland",
+          "Portugal", "Romania", "Slovakia", "Slovenia", "Spain", "Sweden",
+          "Turkey", "United Kingdom", "United States")
+
+mmna = c("Argentina", "Australia", "Bahrain", "Brazil", "Colombia", "Egypt",
+          "Israel", "Japan", "Jordan", "Kuwait", "Morocco", "New Zealand",
+          "Pakistan", "Philippines", "Qatar", "South Korea", "Thailand", "Tunisia")
+
+print(setdiff(nato, countries_df$country_name))
+print(setdiff(mmna, countries_df$country_name))
+
+```
+
+The main adversaries of the US are: 
+
+```{r}
+adversaries = c("North Korea", "Iran", "Russia", "China", "Afghanistan", "Belarus")
+print(setdiff(adversaries, countries_df$country_name))
+```
+
+And now we can add a column to countries_df with the status of the country. If it's neither an ally or an adversary, we can call it neutral: 
+
+```{r}
+countries_df = countries_df %>%
+  mutate(status = case_when(
+    country_name %in% nato | country_name %in% mmna ~ "ally",
+    country_name %in% adversaries ~ "adversary",
+    TRUE ~ "neutral"
+  ))
+```
+
+Taking stock of where we are, we have a dataframe of some of the critical minerals with the countries that are major importers. We also have a dataframe of countries and the status of their relationship with the US. 
+
+To do this best, we actually want to circle back and make our dataframe with import sources temporarily long. Then we can count and join the count with our countries df:
+
+
+```{r}
+country_importers =joined_data %>%
+  separate_rows(Combined_Import_Sources, sep = ",\\s*") %>% # a comma separates each country
+  group_by(Combined_Import_Sources) %>%
+  summarise(Mineral_Count = n_distinct(`Critical Mineral`)) %>%
+  ungroup() %>%
+  rename(country_name = Combined_Import_Sources)
+
+country_import_counts = countries_df %>%
+  left_join(country_importers, by = "country_name") %>%
+  mutate(Mineral_Count = replace_na(Mineral_Count, 0))
+
+head(country_import_counts)
+
+```
+
+Looks right, but there are tons of countries with 0. To make matters simpler:
+
+```{r}
+country_import_counts = country_import_counts %>%
+  filter(Mineral_Count > 0) %>%
+  arrange(desc(Mineral_Count))
+
+head(country_import_counts)
+```
+
+China is a major import source of 17/31 critical minerals! The data is in really good shape to be visualized--especially because we have the country code.
+
+
+Preparing for visualizations
+
+Which minerals have an adversary as a supplier?
+
+```{r}
+expanded_data =  adjusted_joined_data %>%
+  separate_rows(Combined_Import_Sources, sep = ",\\s*") %>%
+  left_join(countries_df, by = c("Combined_Import_Sources" = "country_name"))
+
+critical_minerals_with_adversaries = expanded_data %>%
+  group_by(`Critical Mineral`) %>%
+  summarize(Adversary_Count = sum(status == "adversary")) %>%
+  filter(Adversary_Count == 1)
+
+rows_with_multiple_adversaries = adjusted_joined_data %>%
+  semi_join(critical_minerals_with_adversaries, by = "Critical Mineral")
+
+print(rows_with_multiple_adversaries)
+
+
+```
+
+
+```{r}
+critical_minerals_with_adversaries = expanded_data %>%
+  group_by(`Critical Mineral`) %>%
+  summarize(Adversary_Count = sum(status == "adversary")) %>%
+  filter(Adversary_Count > 1)
+
+rows_with_multiple_adversaries = adjusted_joined_data %>%
+  semi_join(critical_minerals_with_adversaries, by = "Critical Mineral")
+
+print(rows_with_multiple_adversaries)
+```
+
+Only allies:
+
+```{r}
+critical_minerals_no_adversaries_no_neutrals = expanded_data %>%
+  group_by(`Critical Mineral`) %>%
+  summarize(Adversary_Count = sum(status == "adversary"),
+            Neutral_Count = sum(status == "neutral")) %>%
+  filter(Adversary_Count == 0 & Neutral_Count == 0)
+
+rows_no_adversaries_no_neutrals = adjusted_joined_data %>%
+  semi_join(critical_minerals_no_adversaries_no_neutrals, by = "Critical Mineral")
+
+print(rows_no_adversaries_no_neutrals)
+
+```
+
+Bar chart
+
+```{r}
+
+ggplot(data = country_import_counts %>%
+         arrange(desc(Mineral_Count)) %>%
+         slice_head(n = 6),  # top 6 countries 
+       aes(x = reorder(country_name, -Mineral_Count), y = Mineral_Count, fill = status)) +
+  geom_bar(stat = "identity") +
+  scale_fill_manual(values = c("ally" = "blue", "adversary" = "orange", "neutral" = "black")) +
+  labs(title = "Top Countries by Critical Mineral Imports to the U.S.", y = "Number of Minerals", x = "") +
+  theme(
+    panel.background = element_rect(fill = "grey", color = "grey"),
+    panel.grid.major.x = element_blank(),
+    panel.grid.minor.x = element_blank(),
+    text = element_text(color = "black")
+  )
+
+
+```
+
+World map
+
+```{r}
+library(rnaturalearth)
+library(rnaturalearthdata)
+
+world = ne_countries(scale = "medium", returnclass = "sf")
+
+world_data = merge(world, country_import_counts_filtered, by.x = "iso_a2", by.y = "country_code", all.x = TRUE)
+
+# making sure no NAs in Mineral_Count 
+world_data$Mineral_Count[is.na(world_data$Mineral_Count)] = 0
+
+ggplot(data = world_data) +
+  geom_sf(aes(fill = Mineral_Count), color = "white") +  # Drawing countries with fill 
+  scale_fill_gradient(low = "white", high = "red", name = "Mineral Count", na.value = "lightgrey") +
+  labs(title = "Global Map of Critical Mineral Import Counts",
+       subtitle = "Countries colored by the count of critical minerals for which they are major importers to the US") +
+  theme(panel.grid = element_blank(), 
+        panel.background = element_rect(fill = "grey", color = "grey"))
+
+
+```
+
+
+```{r}
+# ONLY FOR REFERENCE
+ggplot(data = world_data) +
+  geom_sf(aes(fill = Mineral_Count), color = "white") +  
+  scale_fill_gradient(low = "white", high = "red", name = "Mineral Count", na.value = "lightgrey") +
+  geom_sf_text(aes(label = name), size = 2.5, check_overlap = TRUE, color = "black") + 
+  labs(title = "Global Map of Critical Mineral Import Counts",
+       subtitle = "Countries colored by the count of critical minerals they import to the US") +
+  theme(panel.grid = element_blank(),
+        panel.background = element_rect(fill = "grey", color = "grey"),
+        text = element_text(size = 8))
+```
+
+Another bar chart (mineral-centric perspective)
+
+```{r}
+adversary_count = expanded_data %>%
+    group_by(`Critical Mineral`) %>%
+    summarise(Adversary_Count = sum(status == "adversary"), .groups = 'drop')  
+
+categorized_minerals = adjusted_joined_data %>%
+    left_join(adversary_count, by = "Critical Mineral") %>%
+    mutate(Adversary_Category = case_when(
+        is.na(Adversary_Count) | Adversary_Count == 0 ~ "No Adversaries",
+        Adversary_Count == 1 ~ "One Adversary",
+        Adversary_Count >= 2 ~ "Two or More Adversaries"
+    ))
+
+mineral_counts_by_adversary = categorized_minerals %>%
+    group_by(Adversary_Category) %>%
+    summarise(Count = n(), .groups = 'drop')  
+
+
+ggplot(mineral_counts_by_adversary, aes(x = Adversary_Category, y = Count, fill = Adversary_Category)) +
+  geom_bar(stat = "identity", show.legend = FALSE) +
+  scale_fill_manual(values = c("No Adversaries" = "blue",
+                               "One Adversary" = "orange",
+                               "Two or More Adversaries" = "orange")) +
+  labs(title = "Mineral Imports Categorized by Number of Adversary Countries",
+       x = "Adversary Category",
+       y = "Count of Minerals") +
+  theme(
+    panel.background = element_rect(fill = "grey", color = "grey"), 
+    panel.grid.major.x = element_blank(),  
+    panel.grid.minor.x = element_blank(),  
+    axis.text.x = element_text(color = "black"), 
+    axis.text.y = element_text(color = "black"), 
+    axis.ticks = element_line(color = "black")  
+  )
+
+```
+
+
